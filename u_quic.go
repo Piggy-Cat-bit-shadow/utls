@@ -198,19 +198,47 @@ func (q *UQUICConn) SetTransportParameters(params []byte) {
 	if params == nil {
 		params = []byte{}
 	}
-	q.conn.quic.transportParams = params // this won't be used for building ClientHello when using a preset
+	q.conn.quic.transportParams = params
 
-	// // instead, we set the transport parameters hold by the ClientHello
-	// for _, ext := range q.conn.Extensions {
-	// 	if qtp, ok := ext.(*QUICTransportParametersExtension); ok {
-	// 		qtp.TransportParametersExtData = params
-	// 	}
-	// }
+	// The parameters are applied to the quic_transport_parameters extension when
+	// the ClientHello is marshalled; see syncQUICTransportParameters.
 
 	if q.conn.quic.started {
 		<-q.conn.quic.signalc
 		<-q.conn.quic.blockedc
 	}
+}
+
+// syncQUICTransportParameters copies the transport parameters supplied through
+// SetTransportParameters into the quic_transport_parameters extension attached to
+// this connection.
+//
+// ApplyPreset clones the ClientHelloSpec it is given, so a caller that writes the
+// parameters into the spec after applying the preset — quic-go has no other way to
+// reach the extension — would otherwise hand uTLS a spec whose extension is no
+// longer the one that gets marshalled, and the ClientHello would carry whatever the
+// preset declared instead of the parameters the caller asked for.
+func (uconn *UConn) syncQUICTransportParameters() error {
+	if uconn.quic == nil || len(uconn.quic.transportParams) == 0 {
+		// No QUIC handshake, or the caller never supplied (non-empty) transport
+		// parameters: leave a preset's own parameters untouched.
+		return nil
+	}
+	for _, ext := range uconn.Extensions {
+		qtp, ok := ext.(*QUICTransportParametersExtension)
+		if !ok {
+			continue
+		}
+		params, err := parseQUICTransportParameters(uconn.quic.transportParams)
+		if err != nil {
+			return err
+		}
+		qtp.TransportParameters = params
+		// A preset may have been marshalled already, which caches the old value.
+		qtp.marshalResult = nil
+		return nil
+	}
+	return nil
 }
 
 func (uc *UConn) QUICSetReadSecret(level QUICEncryptionLevel, suite uint16, secret []byte) {

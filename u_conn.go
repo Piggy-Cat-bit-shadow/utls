@@ -554,6 +554,15 @@ func (uconn *UConn) computeAndUpdateOuterECHExtension(inner *clientHelloMsg, ech
 }
 
 func (uconn *UConn) MarshalClientHello() error {
+	// [uTLS fork] The QUIC API's SetTransportParameters has to reach the wire even
+	// when the ClientHello comes from a preset. ApplyPreset clones the spec, so a
+	// caller that writes the parameters into the spec after applying it (which is
+	// what quic-go does) no longer reaches the extension attached to this
+	// connection. Nothing is done unless a caller supplied parameters.
+	if err := uconn.syncQUICTransportParameters(); err != nil {
+		return err
+	}
+
 	if len(uconn.config.EncryptedClientHelloConfigList) > 0 {
 		inner, _, ech, err := uconn.makeClientHello()
 		if err != nil {

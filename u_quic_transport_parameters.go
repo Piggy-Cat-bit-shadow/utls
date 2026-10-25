@@ -1,8 +1,11 @@
 package tls
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
+	"io"
 	"math"
 	"math/big"
 
@@ -371,4 +374,52 @@ func (f *FakeQUICTransportParameter) ID() uint64 {
 
 func (f *FakeQUICTransportParameter) Value() []byte {
 	return f.Val
+}
+
+// parseQUICTransportParameters splits a marshalled transport parameter blob back
+// into the ordered (id, value) pairs that TransportParameters.Marshal writes,
+// preserving wire order. It is the inverse of Marshal.
+func parseQUICTransportParameters(b []byte) (TransportParameters, error) {
+	var params TransportParameters
+	reader := bytes.NewReader(b)
+	for reader.Len() > 0 {
+		id, err := quicvarint.Read(reader)
+		if err != nil {
+			return nil, fmt.Errorf("tls: invalid QUIC transport parameters: %w", err)
+		}
+		length, err := quicvarint.Read(reader)
+		if err != nil {
+			return nil, fmt.Errorf("tls: invalid QUIC transport parameters: %w", err)
+		}
+		if uint64(reader.Len()) < length {
+			return nil, fmt.Errorf("tls: QUIC transport parameter 0x%x is truncated: want %d bytes, have %d",
+				id, length, reader.Len())
+		}
+		value := make([]byte, length)
+		if _, err := io.ReadFull(reader, value); err != nil {
+			return nil, fmt.Errorf("tls: invalid QUIC transport parameters: %w", err)
+		}
+		params = append(params, rawTransportParameter{id: id, value: value})
+	}
+	return params, nil
+}
+
+// rawTransportParameter carries an already-serialized transport parameter value
+// verbatim.
+//
+// It exists next to FakeQUICTransportParameter because the parser must accept any
+// ID it is given, including the reserved 0x00 (original_destination_connection_id)
+// that a server-side caller may pass, and FakeQUICTransportParameter panics on a
+// zero ID.
+type rawTransportParameter struct {
+	id    uint64
+	value []byte
+}
+
+func (p rawTransportParameter) ID() uint64 {
+	return p.id
+}
+
+func (p rawTransportParameter) Value() []byte {
+	return p.value
 }
